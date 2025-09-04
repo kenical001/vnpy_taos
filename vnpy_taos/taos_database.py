@@ -175,24 +175,67 @@ class TaosDatabase(BaseDatabase):
         table_name: str = "_".join(["bar", symbol.replace("-", "_"), exchange.value, interval.value])
 
         # 从数据库读取数据
-        df: pd.DataFrame = pd.read_sql(f"select *, interval_ from {table_name} WHERE datetime BETWEEN '{start}' AND '{end}'", self.conn)
+        # df: pd.DataFrame = pd.read_sql(f"select *, interval_ from {table_name} WHERE datetime BETWEEN '{start}' AND '{end}'", self.conn)
 
-        # 返回BarData列表
+        # # 返回BarData列表
+        # bars: list[BarData] = []
+
+        # for row in df.itertuples():
+        #     bar: BarData = BarData(
+        #         symbol=symbol,
+        #         exchange=exchange,
+        #         datetime=row.datetime.astimezone(DB_TZ),
+        #         interval=Interval(row.interval_),
+        #         volume=row.volume,
+        #         turnover=row.turnover,
+        #         open_interest=row.open_interest,
+        #         open_price=row.open_price,
+        #         high_price=row.high_price,
+        #         low_price=row.low_price,
+        #         close_price=row.close_price,
+        #         gateway_name="DB"
+        #     )
+        #     bars.append(bar)
+
+        sql = f"""
+            SELECT 
+                datetime,
+                volume,
+                turnover,
+                open_interest,
+                open_price,
+                high_price,
+                low_price,
+                close_price
+            FROM {table_name}
+            WHERE 
+                datetime BETWEEN '{start.strftime("%Y-%m-%d %H:%M:%S")}' 
+                AND '{end.strftime("%Y-%m-%d %H:%M:%S")}'
+        """
+
+         # 执行原生TDengine查询
+        result = self.conn.query(sql)
+        
+        # 处理结果集
         bars: list[BarData] = []
-
-        for row in df.itertuples():
-            bar: BarData = BarData(
+        for row in result:
+            # 转换时区（假设原始数据存储为UTC）
+            # db_time = datetime.strptime(row[0], "%Y-%m-%d %H:%M:%S.%f")
+            db_time = row[0].astimezone(DB_TZ)
+            
+            # 构建BarData对象
+            bar = BarData(
                 symbol=symbol,
                 exchange=exchange,
-                datetime=row.datetime.astimezone(DB_TZ),
-                interval=Interval(row.interval_),
-                volume=row.volume,
-                turnover=row.turnover,
-                open_interest=row.open_interest,
-                open_price=row.open_price,
-                high_price=row.high_price,
-                low_price=row.low_price,
-                close_price=row.close_price,
+                datetime=db_time,
+                interval=interval,
+                volume=row[1],
+                turnover=row[2],
+                open_interest=row[3],
+                open_price=row[4],
+                high_price=row[5],
+                low_price=row[6],
+                close_price=row[7],
                 gateway_name="DB"
             )
             bars.append(bar)
@@ -258,6 +301,113 @@ class TaosDatabase(BaseDatabase):
             ticks.append(tick)
 
         return ticks
+
+    def load_last_tick_data(
+        self,
+        symbol: str,
+        exchange: Exchange,
+        start: datetime,
+        end: datetime
+    ) -> TickData:
+        """读取区间最近的tick数据"""
+        # 生成数据表名
+        table_name: str = "_".join(["tick", symbol.replace("-", "_"), exchange.value])
+
+        sql = f"""
+            SELECT 
+                datetime,
+                name,
+                volume,
+                turnover,
+                open_interest,
+                last_price,
+                limit_up,
+                limit_down,
+                open_price,
+                high_price,
+                low_price,
+                pre_close,
+                bid_price_1,
+                bid_price_2,
+                bid_price_3,
+                bid_price_4,
+                bid_price_5,
+                ask_price_1,
+                ask_price_2,
+                ask_price_3,
+                ask_price_4,
+                ask_price_5,
+                bid_volume_1,
+                bid_volume_2,
+                bid_volume_3,
+                bid_volume_4,
+                bid_volume_5,
+                ask_volume_1,
+                ask_volume_2,
+                ask_volume_3,
+                ask_volume_4,
+                ask_volume_5,
+                localtime
+            FROM {table_name}
+            WHERE 
+                datetime BETWEEN '{start.strftime("%Y-%m-%d %H:%M:%S")}' 
+                AND '{end.strftime("%Y-%m-%d %H:%M:%S")}' 
+                ORDER BY datetime DESC 
+                LIMIT 1
+        """
+
+         # 执行原生TDengine查询
+        result = self.conn.query(sql)
+
+        if result.row_count == 0:
+            return None
+
+        row = result[0]
+
+        # 转换时区（假设原始数据存储为UTC）
+        tick_time = row[0].astimezone(DB_TZ)
+        local_time = row[32].astimezone(DB_TZ)
+            
+        tick: TickData = TickData(
+                symbol=symbol,
+                exchange=exchange,
+                datetime=tick_time,
+                name=row[1],
+                volume=row[2],
+                turnover=row[3],
+                open_interest=row[4],
+                last_price=row[5],
+                limit_up=row[6],
+                limit_down=row[7],
+                open_price=row[8],
+                high_price=row[9],
+                low_price=row[10],
+                pre_close=row[11],
+                bid_price_1=row[12],
+                bid_price_2=row[13],
+                bid_price_3=row[14],
+                bid_price_4=row[15],
+                bid_price_5=row[16],
+                ask_price_1=row[17],
+                ask_price_2=row[18],
+                ask_price_3=row[19],
+                ask_price_4=row[20],
+                ask_price_5=row[21],
+                bid_volume_1=row[22],
+                bid_volume_2=row[23],
+                bid_volume_3=row[24],
+                bid_volume_4=row[25],
+                bid_volume_5=row[26],
+                ask_volume_1=row[27],
+                ask_volume_2=row[28],
+                ask_volume_3=row[29],
+                ask_volume_4=row[30],
+                ask_volume_5=row[31],
+                localtime=local_time,
+                gateway_name="DB"
+            )
+        
+        return tick
 
     def delete_bar_data(
         self,

@@ -412,6 +412,65 @@ class TaosDatabase(BaseDatabase):
         
         return tick
 
+    def load_last_bar_data(
+        self,
+        symbol: str,
+        exchange: Exchange,
+        interval: Interval,
+        start: datetime,
+        end: datetime
+    ) -> BarData:
+        """读取区间最近的分钟K线数据"""
+        # 生成数据表名
+        table_name: str = "_".join(["bar", symbol.replace("-", "_"), exchange.value, interval.value])
+
+        sql = f"""
+            SELECT 
+                datetime,
+                volume,
+                turnover,
+                open_interest,
+                open_price,
+                high_price,
+                low_price,
+                close_price
+            FROM {table_name}
+            WHERE 
+                datetime BETWEEN '{start.strftime("%Y-%m-%d %H:%M:%S")}' 
+                AND '{end.strftime("%Y-%m-%d %H:%M:%S")}' 
+                ORDER BY datetime DESC 
+                LIMIT 1
+        """
+
+        # 执行原生TDengine查询
+        self.cursor.execute(sql)
+        result = self.cursor.fetchall()
+            
+        if not result:
+            return None
+
+        row = result[0]
+
+        # 转换时区（假设原始数据存储为UTC）
+        bar_time = row[0].astimezone(DB_TZ)
+            
+        bar: BarData = BarData(
+            symbol=symbol,
+            exchange=exchange,
+            datetime=bar_time,
+            interval=interval,
+            volume=row[1],
+            turnover=row[2],
+            open_interest=row[3],
+            open_price=row[4],
+            high_price=row[5],
+            low_price=row[6],
+            close_price=row[7],
+            gateway_name="DB"
+        )
+        
+        return bar
+
     def delete_bar_data(
         self,
         symbol: str,

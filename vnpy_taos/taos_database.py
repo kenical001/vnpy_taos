@@ -5,7 +5,7 @@ import taos
 import pandas as pd
 
 from vnpy.trader.constant import Exchange, Interval
-from vnpy.trader.object import BarData, TickData
+from vnpy.trader.object import BarData, TickData, MainContract
 from vnpy.trader.database import (
     BaseDatabase,
     BarOverview,
@@ -18,6 +18,7 @@ from .taos_script import (
     CREATE_DATABASE_SCRIPT,
     CREATE_BAR_TABLE_SCRIPT,
     CREATE_TICK_TABLE_SCRIPT,
+    CREATE_MAIN_CONTRACT_TABLE_SCRIPT,
 )
 
 
@@ -49,6 +50,7 @@ class TaosDatabase(BaseDatabase):
         self.cursor.execute(f"use {self.database}")
         self.cursor.execute(CREATE_BAR_TABLE_SCRIPT)
         self.cursor.execute(CREATE_TICK_TABLE_SCRIPT)
+        self.cursor.execute(CREATE_MAIN_CONTRACT_TABLE_SCRIPT)
 
     def save_bar_data(self, bars: list[BarData], stream: bool = False) -> bool:
         """保存k线数据"""
@@ -356,10 +358,11 @@ class TaosDatabase(BaseDatabase):
                 LIMIT 1
         """
 
-         # 执行原生TDengine查询
-        result = self.conn.query(sql)
-
-        if result.row_count == 0:
+        # 执行原生TDengine查询
+        self.cursor.execute(sql)
+        result = self.cursor.fetchall()
+            
+        if not result:
             return None
 
         row = result[0]
@@ -488,6 +491,126 @@ class TaosDatabase(BaseDatabase):
             overviews.append(overview)
 
         return overviews
+
+    def save_main_contract_data(self, data: list[MainContract]) -> bool:
+        """保存主力合约数据"""
+        if not data:
+            return False
+        
+        # 确保所有数据都是同一个品种和交易所
+        product = data[0].product
+        exchange = data[0].exchange
+        
+        # 检查所有数据的一致性
+        for item in data:
+            if item.product != product or item.exchange != exchange:
+                print(f"数据不一致: {item.product}/{item.exchange.value} vs {product}/{exchange.value}")
+                return False
+            if not item.trade_date:
+                print("数据缺少交易日期")
+                return False
+            
+        # 生成表名
+        table_name: str = f"main_contract_{product}"
+        
+        # 以超级表为模版创建表
+        create_table_script: str = (
+            f"CREATE TABLE IF NOT EXISTS {table_name} "
+            "USING s_main_contract(product, exchange, start_date, end_date, count_) "
+            f"TAGS('{product}', '{exchange.value}', NULL, NULL, '0')"
+        )
+        self.cursor.execute(create_table_script)
+        
+        # 写入主力合约数据
+        data_values = []
+        for item in data:
+            trade_date = item.trade_date
+            symbol = item.symbol
+            
+            value = f"('{trade_date}', '{symbol}')"
+            data_values.append(value)
+        
+        # 批量插入数据
+        if not data_values:
+            return True
+            
+        batch_size = 1000
+        try:
+            for i in range(0, len(data_values), batch_size):
+                batch = data_values[i:i+batch_size]
+                insert_sql = f"INSERT INTO {table_name} (trade_date, symbol) VALUES {','.join(batch)}"
+                self.cursor.execute(insert_sql)
+        except Exception as e:
+            print(f"批量插入主力合约数据失败: {e}")
+            return False
+        
+        # 更新汇总信息
+        if data:
+            # 获取当前数据的时间范围
+            new_start = min(item.trade_date for item in data)
+            new_end = max(item.trade_date for item in data)
+            new_count = len(data)
+            
+            # 查询现有的汇总信息
+            self.cursor.execute(f"SELECT start_date, end_date, count_ FROM {table_name} LIMIT 1")
+            result = self.cursor.fetchall()
+            
+            if result:
+                # 合并新旧数据范围
+                current_start, current_end, current_count = result[0]
+                start_date = min(new_start, current_start) if current_start else new_start
+                end_date = max(new_end, current_end) if current_end else new_end
+                count = new_count + int(current_count) if current_count else new_count
+            else:
+                # 没有现有数据，使用新数据范围
+                start_date = new_start
+                end_date = new_end
+                count = new_count
+            
+            # 更新汇总信息
+            self.cursor.execute(f"ALTER TABLE {table_name} SET TAG start_date='{start_date}';")
+            self.cursor.execute(f"ALTER TABLE {table_name} SET TAG end_date='{end_date}';")
+            self.cursor.execute(f"ALTER TABLE {table_name} SET TAG count_='{count}';")
+        
+        return True
+    
+    def load_main_contract_data(self, product: str, exchange: Exchange, start: datetime, end: datetime) -> list[MainContract]:
+        """读取主力合约数据"""
+        # 生成表名
+        table_name: str = f"main_contract_{product}"
+        
+        try:
+            
+            # 构建SQL查询主力合约数据
+            data_sql = f"""
+                SELECT 
+                    trade_date,
+                    symbol
+                FROM {table_name}
+                WHERE 
+                    trade_date BETWEEN '{start.strftime("%Y-%m-%d")}' 
+                    AND '{end.strftime("%Y-%m-%d")}'
+                ORDER BY trade_date
+            """
+            
+            # 执行查询
+            data_result = self.conn.query(data_sql)
+            
+            # 处理结果
+            data = []
+            for row in data_result:
+                main_contract = MainContract(
+                    trade_date=row[0],
+                    product=product,
+                    symbol=row[1],
+                    exchange=exchange
+                )
+                data.append(main_contract)
+                
+            return data
+        except Exception as e:
+            print(f"查询主力合约数据失败: {e}")
+            return []
 
     def insert_in_batch(self, table_name: str, data_set: list, batch_size: int) -> None:
         """数据批量插入数据库"""

@@ -7,6 +7,21 @@ CREATE_DATABASE_SCRIPT = """
 CREATE DATABASE IF NOT EXISTS {} KEEP 36500
 """
 
+# 创建主力合约超级表
+CREATE_MAIN_CONTRACT_TABLE_SCRIPT = """
+CREATE STABLE IF NOT EXISTS s_main_contract (
+    trade_date TIMESTAMP,
+    symbol BINARY(20)
+)
+TAGS(
+    product BINARY(20),
+    exchange BINARY(10),
+    start_date TIMESTAMP,
+    end_date TIMESTAMP,
+    count_ DOUBLE
+)
+"""
+
 # 创建bar超级表
 CREATE_BAR_TABLE_SCRIPT = """
 CREATE STABLE IF NOT EXISTS s_bar (

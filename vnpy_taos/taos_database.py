@@ -510,6 +510,39 @@ class TaosDatabase(BaseDatabase):
 
         return count
 
+    def delete_bar_by_datetime(
+        self,
+        symbol: str,
+        exchange: Exchange,
+        interval: Interval,
+        dt: datetime
+    ) -> bool:
+        """根据datetime删除指定K线"""
+        # 生成数据表名
+        table_name: str = "_".join(["bar", symbol.replace("-", "_"), exchange.value, interval.value])
+        
+        # 格式化日期时间为字符串
+        dt_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+        
+        try:
+            # 删除指定datetime的K线数据
+            self.cursor.execute(f"DELETE FROM {table_name} WHERE datetime = '{dt_str}'")
+            
+            # 更新汇总信息
+            self.cursor.execute(f"select count(*) from {table_name}")
+            results = self.cursor.fetchall()
+
+            bar_count: int = int(results[0][0])
+            overview_count = bar_count
+
+            # 更新汇总信息
+            self.cursor.execute(f"ALTER TABLE {table_name} SET TAG count_='{overview_count}';")
+            
+            return True
+        except Exception as e:
+            print(f"删除K线数据失败: {e}")
+            return False
+
     def get_bar_overview(self) -> list[BarOverview]:
         """查询K线汇总信息"""
         # 从数据库读取数据
@@ -662,13 +695,14 @@ class TaosDatabase(BaseDatabase):
                     trade_date=row[0],
                     product=product,
                     symbol=row[1],
-                    exchange=exchange
+                    exchange=exchange,
+                    gateway_name="DB"
                 )
                 data.append(main_contract)
                 
             return data
         except Exception as e:
-            print(f"查询主力合约数据失败: {e}")
+            # print(f"查询主力合约数据失败: {e}")
             return []
 
     def insert_in_batch(self, table_name: str, data_set: list, batch_size: int) -> None:
